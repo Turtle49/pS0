@@ -11,19 +11,19 @@
 # v0.4: push/hold baseline
 # v0.5: CDC enabled
 # v1: discrimination from angle alone, no normalization
-# v2: general cleanup; IsItTrash instead of 'particle'
+# v2: general cleanup; IsItTrash instead of 'particle'; added vibratory bowl capabilities
 
 import usb_cdc
 import time
 import math
 import board
-import busio
 import digitalio
-from analogio import AnalogIn
 import mrs_tcs34725
 import adafruit_tca9548a
 import supervisor
-#supervisor.disable_autoreload()
+import pwmio
+
+#Disable autoreload when save
 supervisor.runtime.autoreload = False
 
 ##Parameters##
@@ -33,22 +33,26 @@ transit = 0
 #Window time, in seconds: window of time a particle travels through the sorting junction
 window = .4; particle_arrival = 0 #create arrival timing variable
 
-#SDA Ports used by RGB sensor in tca multiplexer
-multi_port = [0, 2, 3]
-#Sensor integration time, in ms. 614.4/10 #for integration time 2.4 - 614.4 ms. Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
-RGB_int_time = 20
-#Gain of 1, 4, 16, 60
-RGB_gain = 4
-
-#Tolerance in color determination
-color_error = 1 #max angle, in radians, between data and reference
-
 ##Sorting parameters
 base_weight = RGB_int_time/1000 #Data moving average; weight of new data for for moving average; inverse of number of points in moving average
 min_threshold = 10 #Minimum size of signal vectors, in bits, to be considered signal, not noise
 #Color reference list: [label, ID vector]
 data_ref = [['Blue', [-0.456,0.115,0.870]], ['Yellow', [0.716,0.631,0.297]],['Red', [0.782,-0.371,-0.238]],['Black', [-0.657,-0.568,-0.496]]]
 color_ref = data_ref[2][1]
+#Tolerance in color determination
+color_error = 1 #max angle, in radians, between data and reference
+
+#RGB sensors SDA and setup parameters
+multi_port = [0, 2, 3]
+#Sensor integration time, in ms. 614.4/10 #for integration time 2.4 - 614.4 ms. Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
+RGB_int_time = 20
+#Gain of 1, 4, 16, 60
+RGB_gain = 60
+
+# Vibratory bowl parameters
+_frequency = 65
+_displacement = 20  # Maximum number of rotaional steps, in breaks of 1.8 degree as per stepper motor
+_microstepping = 1  # Set to match microsteps per full step on the board (i.e 1 = no microstepping, 2 = 1/2 step; 1/Microstepping)
 
 ## Define Functions
 #CDC USB com Setup
@@ -75,6 +79,7 @@ def is_it_color(data,reference,error):
         return True
         #print('Particle!')
     else:
+        pass
         return False
 
 #Modulus, or size of vector
@@ -95,7 +100,7 @@ def valve_control(current_time, arrival_time):
         del arrival_time[0]
 
 ## Initialization of components
-#Create the TCA9548A object and give it the I2C bus
+#Initiate TCA9548A object and give it the I2C bus
 tca = adafruit_tca9548a.TCA9548A(board.I2C())
 time.sleep(.02)
 
@@ -106,6 +111,11 @@ for i, port in enumerate(multi_port):
     time.sleep(0.02)
     sensorRGB[i].integration_time = RGB_int_time #614.4/10 #for integration time 2.4 - 614.4 ms. Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
     sensorRGB[i].gain = RGB_gain
+
+#Initialize vibratory bowl, direction, step, and halt (input)
+dir_pin=board.D1; dir_  = digitalio.DigitalInOut(dir_pin); dir_.direction  = digitalio.Direction.OUTPUT; dir_.value = False
+step_pin=board.D4; pw_step = pwmio.PWMOut(step_pin, frequency=int(_displacement * _frequency/2), duty_cycle=int(65536/2))
+halt_pin=board.D12; halt_ = digitalio.DigitalInOut(halt_pin); halt_.direction = digitalio.Direction.INPUT; halt_.pull = digitalio.Pull.DOWN
 
 #Initiate CDC USB communication
 comm_device = node_setup() ##WARNING: in Trinket M0 the UART object MUST be created before I2C https://learn.adafruit.com/circuitpython-essentials/circuitpython-uart-serial
@@ -127,19 +137,23 @@ relay_on = True
 relay = digitalio.DigitalInOut(board.D13); relay.direction = digitalio.Direction.OUTPUT
 relay.value = relay_on; time.sleep(.3); relay.value = not(relay_on)
 
-##Initialize baselines
+##Variable initialization
+#Initialize baselines
 data_base = [0,0,0,0]
 data_long_base = [0,0,0,0,0,0,0,0,0,0,0,0]
 #initialization counter to capture a baseline automatically
 base_init = 0
 base_count = 0 #counter for holding baselines
 
-#Initializae time variable for valving
+#Initialize time variable for valving
 particle_arrival = []
 
 data_raw_multi = [0,0,0,0]*len(multi_port)
 data = [0,0,0,0]
 data_temp = [0,0,0,0]*len(multi_port)
+
+#Initialize stepper motor timekeeper
+step_tic = time.monotonic()
 
 while True:
     data_long = []
@@ -170,7 +184,6 @@ while True:
 
     ##Data processing and Classification
     #Initialization: loop sets the baseline for the 1st time...it take3s a couple of reads to stabilize
-    ###  DELETE??XXXXX
     while base_init < 4:
         #print(distance(data))
         data = [0,0,0,0]
@@ -191,43 +204,42 @@ while True:
             data_long_base[i] = (1-base_weight) * data_long_base[i] + base_weight * data_long[i]
         #print(data_long_base)
 
-    #Switches
+    ##Switches
     # In case of switch A: force basline
     if not switch_baseline.value:
         print('calculating: ',data_long_base)
         base_count = base_count + 1
         for i in range(len(data_long)):
             data_long_base[i] = data_long_base[i] + data_long[i]
-        #display.fill(0)
-#        display.text('Baseline Acquired', 15, 50, 1)
-#        display.show()
         time.sleep(.5)
     else:
         if base_count > 0:
-            #data_long_base = data_long_base / base_count
             for i in range(len(data_long_base)):
                 data_long_base[i] = data_long_base[i] / (base_count + 1)
             print('Baseline: ',data_long_base)
         base_count = 0
-
-
     # In case of switch pedal: print info
     if switch_print.value:
-    #    display.text('Data output', 25, 22, 1)
-    #    display.show()
         print(tuple([data[0], data[1], data[2]]))
         node_write(str(tuple([data[0], data[1], data[2]]))+' \n',comm_device)
         #print(tuple([time.monotonic() , particle_arrival, time.monotonic() - particle_arrival,transit,transit + window, distance(data)]))
         #print(tuple([distance(data),0]))
         if particle_arrival:
-            pass#print("arrival")
-
+            pass
     # In case of switch C: open valve
     if not switch_valve.value:
         relay.value = (relay_on)
     elif switch_valve.value:
         relay.value = not(relay_on)
-
     # In case of switch B: exit
     if not switch_exit.value:
         break
+    #Vibratory bowl direction control
+    if (time.monotonic() - step_tic) > (2 * _microstepping/ _frequency):
+        dir_.value = not dir_.value
+        step_tic = time.monotonic()
+    #Vibratory bowl halt
+    if halt_.value:
+        print("figure out how to turn off  pw_step = pwmio.PWMOut...")
+        
+        
