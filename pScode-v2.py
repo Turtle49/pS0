@@ -115,7 +115,7 @@ for i, port in enumerate(multi_port):
 #Initialize vibratory bowl, direction, step, and halt (input)
 dir_pin=board.D1; dir_  = digitalio.DigitalInOut(dir_pin); dir_.direction  = digitalio.Direction.OUTPUT; dir_.value = False
 step_pin=board.D4; pw_step = pwmio.PWMOut(step_pin, frequency=int(_displacement * _frequency/2), duty_cycle=int(65536/2))
-halt_pin=board.D12; halt_ = digitalio.DigitalInOut(halt_pin); halt_.direction = digitalio.Direction.INPUT; halt_.pull = digitalio.Pull.DOWN
+halt_pin=board.D12; halt_ = digitalio.DigitalInOut(halt_pin); halt_.direction = digitalio.Direction.INPUT; halt_.pull = digitalio.Pull.UP
 
 #Initiate CDC USB communication
 comm_device = node_setup() ##WARNING: in Trinket M0 the UART object MUST be created before I2C https://learn.adafruit.com/circuitpython-essentials/circuitpython-uart-serial
@@ -134,6 +134,7 @@ switch_valve = digitalio.DigitalInOut(board.D5); switch_valve.direction = digita
 #On/Off value of relay
 relay_on = True
 #Relay map for jet sorting with Feather M4
+#First relay use D13 in Feather M4. For a second relay use pin D24
 relay = digitalio.DigitalInOut(board.D13); relay.direction = digitalio.Direction.OUTPUT
 relay.value = relay_on; time.sleep(.3); relay.value = not(relay_on)
 
