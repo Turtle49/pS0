@@ -33,21 +33,21 @@ transit = 0
 #Window time, in seconds: window of time a particle travels through the sorting junction
 window = .4; particle_arrival = 0 #create arrival timing variable
 
-##Sorting parameters
-base_weight = RGB_int_time/1000 #Data moving average; weight of new data for for moving average; inverse of number of points in moving average
-min_threshold = 10 #Minimum size of signal vectors, in bits, to be considered signal, not noise
-#Color reference list: [label, ID vector]
-data_ref = [['Blue', [-0.456,0.115,0.870]], ['Yellow', [0.716,0.631,0.297]],['Red', [0.782,-0.371,-0.238]],['Black', [-0.657,-0.568,-0.496]]]
-color_ref = data_ref[2][1]
-#Tolerance in color determination
-color_error = 1 #max angle, in radians, between data and reference
-
 #RGB sensors SDA and setup parameters
 multi_port = [0, 2, 3]
 #Sensor integration time, in ms. 614.4/10 #for integration time 2.4 - 614.4 ms. Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
 RGB_int_time = 20
 #Gain of 1, 4, 16, 60
 RGB_gain = 60
+
+#Sorting parameters
+base_weight = RGB_int_time/1000 #Data moving average; weight of new data for for moving average; inverse of number of points in moving average
+min_threshold = 10 #Minimum size of signal vectors, in bits, to be considered signal, not noise
+#Color reference list: [label, ID vector]
+#data_ref = [['Blue', [-0.456,0.115,0.870]], ['Yellow', [0.716,0.631,0.297]],['Red', [0.782,-0.371,-0.238]],['Black', [-0.657,-0.568,-0.496]]]
+color_ref = [[0.716,0.631,0.297],[0.782,-0.371,-0.238]]
+#Tolerance in color determination
+color_error = 1 #max angle, in radians, between data and reference
 
 # Vibratory bowl parameters
 _frequency = 65
@@ -83,18 +83,18 @@ def is_it_color(data,reference,error):
         return False
 
 #Modulus, or size of vector
-def distance(a):
+def distance(a,base):
     d = 0
-    for i in a:
-        d += math.pow(i,2)
+    for i in range(len(a)):
+        d += math.pow(a[i]-base[i],2)
     return math.pow(d,.5)
 
 #Valve checking function
 def valve_control(current_time, arrival_time):
-    if len(particle_time)>1 and (current_time - arrival_time[0] > transit) and (current_time - arrival_time[0] < transit + window):
+    if len(arrival_time)>1 and (current_time - arrival_time[0] > transit) and (current_time - arrival_time[0] < transit + window):
         relay.value = relay_on
         #print('valve on!')
-    elif (current_time - arrival_time[0]) > (transit + window):
+    elif len(arrival_time)>1 and(current_time - arrival_time[0]) > (transit + window):
         relay.value = not(relay_on)
         #particle_arrival = 0
         del arrival_time[0]
@@ -122,7 +122,7 @@ comm_device = node_setup() ##WARNING: in Trinket M0 the UART object MUST be crea
 
 ##Initialize buttons
 #Initialize printout switch
-switch_print = digitalio.DigitalInOut(board.D4); switch_print.direction = digitalio.Direction.INPUT; switch_print.pull = digitalio.Pull.UP
+switch_print = digitalio.DigitalInOut(board.D6); switch_print.direction = digitalio.Direction.INPUT; switch_print.pull = digitalio.Pull.UP
 #Initailizase baseline reset and capture
 switch_baseline = digitalio.DigitalInOut(board.D9); switch_baseline.direction = digitalio.Direction.INPUT; switch_baseline.pull = digitalio.Pull.UP
 #Initialize exit button
@@ -193,9 +193,10 @@ while True:
         break
 
     #Discriminate small signals and double-counting slow particles
-    if (distance(data_long[0:2],data_long_base[0:2]) > min_threshold) or (distance(data_long[4:6],data_long_base[4:6]) > min_threshold) or distance(data_long[8:10],data_long_base[8:10]) > min_threshold:
+    if (distance(data_long[0:2],data_long_base[0:2]) > min_threshold) or (distance(data_long[4:6],data_long_base[4:6]) > min_threshold) or (distance(data_long[8:10],data_long_base[8:10]) > min_threshold):
+#    if (10) > min_threshold or (2) > min_threshold or (1) > min_threshold:
         #Comparison to reference values for identification
-        if  not(is_it_color(data_long[0:2],color_ref,color_error) or is_it_color(data_long[4:6],color_ref,color_error) or is_it_color(data_long[8:10],color_ref,color_error)):
+        if  not(is_it_color(data_long[0:3],color_ref,color_error) or is_it_color(data_long[4:6],color_ref,color_error) or is_it_color(data_long[8:10],color_ref,color_error)):
             #Mark time the lastest particle passed by
             particle_arrival.insert(0,time.monotonic())
     else:
@@ -221,7 +222,8 @@ while True:
         base_count = 0
     # In case of switch pedal: print info
     if switch_print.value:
-        print(tuple([data[0], data[1], data[2]]))
+        print(tuple(data_long))
+        #print(tuple([data[0], data[1], data[2]]))
         node_write(str(tuple([data[0], data[1], data[2]]))+' \n',comm_device)
         #print(tuple([time.monotonic() , particle_arrival, time.monotonic() - particle_arrival,transit,transit + window, distance(data)]))
         #print(tuple([distance(data),0]))
@@ -240,7 +242,7 @@ while True:
         dir_.value = not dir_.value
         step_tic = time.monotonic()
     #Vibratory bowl halt
-    if halt_.value:
+    if not halt_.value:
         print("figure out how to turn off  pw_step = pwmio.PWMOut...")
         
         
