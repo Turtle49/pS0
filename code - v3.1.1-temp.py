@@ -13,7 +13,6 @@
 # v1: discrimination from angle alone, no normalization
 # v2: general cleanup; IsItTrash instead of 'particle'; added vibratory bowl capabilities
 # v3.1: implementation in PCB
-# v4: streamlined, loop eliminations, checks for values faster
 
 import usb_cdc
 import time
@@ -53,8 +52,11 @@ min_threshold = (
 
 ####INTEGRATION TIME TESTS
 
-#max_threshold = 200  # Maximum size of signal vectors, in bits, to be considered signal, not spackle
-max_threshold = 20000000  # debugging
+max_threshold = (
+    200  # Maximum size of signal vectors, in bits, to be considered signal, not spackle
+)
+max_threshold = 20000  # Maximum size of signal vectors, in bits, to be considered signal, not spackle
+
 #######
 
 # Color reference list: [label, ID vector]
@@ -62,8 +64,10 @@ max_threshold = 20000000  # debugging
 color_ref = [[88.791, 78.2471, 75.2412]]  # Sunshine Plastics gray
 # Tolerance in color determination
 color_error = 0.1  # max angle, in radians, between data and reference
-bad_counter_threshold = 2  # max number of readings of "bad" particles before the valve is activated
-#flag_count_max = 0  # int(RGB_int_time/5) #number of repeat queries to a sensor that keeps giving the same answer as before
+bad_counter_threshold = (
+    2  # max number of readings of "bad" particles before the valve is activated
+)
+flag_count_max = 0  # int(RGB_int_time/5) #number of repeat queries to a sensor that keeps giving the same answer as before
 
 # RGB Digital sensor function
 def digitalRGB_sensor(i):
@@ -128,9 +132,13 @@ time.sleep(0.02)
 # Initiate RGB sensors
 sensorRGB = [0] * len(multi_port)
 for i, port in enumerate(multi_port):
-    sensorRGB[i] = mrs_tcs34725.TCS34725(tca[port])  ##WARNING: in Trinket M0 the UART object MUST be created before I2C https://learn.adafruit.com/circuitpython-essentials/circuitpython-uart-serial
+    sensorRGB[i] = mrs_tcs34725.TCS34725(
+        tca[port]
+    )  ##WARNING: in Trinket M0 the UART object MUST be created before I2C https://learn.adafruit.com/circuitpython-essentials/circuitpython-uart-serial
     time.sleep(0.02)
-    sensorRGB[i].integration_time = RGB_int_time  #Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
+    sensorRGB[
+        i
+    ].integration_time = RGB_int_time  # 614.4/10 #for integration time 2.4 - 614.4 ms. Make sure the TCS34725 library adafruit_tcs34725.py has been modified, line 224
     sensorRGB[i].gain = RGB_gain
 
 ##Initialize buttons
@@ -168,28 +176,68 @@ data_base_multi = [[0.0, 0.0, 0.0]] * len(multi_port)
 data_base_multi_temp = [0.0, 0.0, 0.0]
 base_init = True
 base_count = 0
-#Loop to read initial baselines
-for i in range(len(multi_port)):
-    data_base_multi[i] = digitalRGB_sensor(i)
-
 
 # Initialize time variable for valving
+bad_counter = (
+    0  # counter of repeated readings of "bad" before the valves are allowed to activate
+)
 particle_arrival = []
 data_raw_multi = [[0.0, 0.0, 0.0]] * len(multi_port)
 data_multi = [[0.0, 0.0, 0.0]] * len(multi_port)
 data_multi_temp = [0.0, 0.0, 0.0]
 
+# Timing variable
+time_stamp = 0
+
 while True:
-    bad_counter = 0
-    good_counter = 0
+    # Timing dummy variable for debugging
+    print(tuple([time.monotonic() - time_stamp]))
+    time_stamp = time.monotonic()
+
+    # data_long = []
+    flag_check_multi = [True] * len(multi_port)
+    flag_count_multi = [0] * len(multi_port)
+
+    ##Acquire data
+    # Loop for as long as at least one flag remains True
+    while True in flag_check_multi:
+        # Sensor readout
+        for i in range(len(multi_port)):
+            # Valve control, because this function needs to run frequently and repeadetly
+            valve_control(time.monotonic(), particle_arrival)
+            # Need to check this sensor?
+            if flag_check_multi[i] == True:
+                flag_count_multi[i] = flag_count_multi[i] + 1
+                data_raw = digitalRGB_sensor(i)
+
+                # Is the data new? If not, has we asked enough times already before we take the number and go with it.
+                if (
+                    data_raw != data_raw_multi[i]
+                    or flag_count_multi[i] > flag_count_max
+                ):  # we will check up to 5 times per integration period
+                    # Flag, so it won't be read again
+                    flag_check_multi[i] = False
+                    # Update loop data ckeck
+                    data_raw_multi[i] = data_raw
+
+    # assign baseline, only in the first run
+    if base_init:
+        data_base_multi = data_raw_multi[:]
+        base_init = False
+
+    # remapping of data to have baseline (this can be moved up to sensor readout loops)
+    for n in range(len(multi_port)):
+        data_multi[n] = [
+            x1 - x2 for (x1, x2) in zip(data_raw_multi[n], data_base_multi[n])
+        ]
+    #        for p in range(len(data_raw_multi[i])):
+    #            data_multi_temp[p] = data_raw_multi[n][p] - data_base_multi[n][p]
+    #        data_multi[n] = list(data_multi_temp)
+
     ##Data processing and Classification
     # Discriminate small signals and double-counting slow particles (this to be moved up to sensor readout loops)
     for k in range(len(multi_port)):
-        # Sensor readout
-        # Valve control, because this function needs to run frequently and repeadetly
-        valve_control(time.monotonic(), particle_arrival)
-        data_raw_multi[k] = digitalRGB_sensor(k)
-        data_multi[k] = [x1 - x2 for (x1, x2) in zip(data_raw_multi[k], data_base_multi[k])]
+
         # print(distance(data_raw_multi[k],data_base_multi[k]),data_raw_multi[k],data_base_multi[k])
         if distance(data_raw_multi[k], data_base_multi[k]) > min_threshold:
             if distance(data_raw_multi[k], data_base_multi[k]) < max_threshold:
@@ -199,20 +247,62 @@ while True:
                     if bad_counter > bad_counter_threshold:
                         # Mark time for valving
                         particle_arrival.insert(0, time.monotonic())
-                        #print(tuple([x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ), ",bad, gray Sunshine", )
-                        print(tuple(time.monotonic(), k, [x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ), ",bad", good_counter,bad_counter , "gray Sunshine", )
+                        print(
+                            tuple(
+                                [
+                                    x1 - x2
+                                    for (x1, x2) in zip(
+                                        data_raw_multi[k], data_base_multi[k]
+                                    )
+                                ]
+                            ),
+                            ",bad, gray Sunshine",
+                        )
                     else:
-                        #print(tuple([x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ),",almost bad, gray Sunshine", )
-                        print(tuple(time.monotonic(), k, [x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ), ",almost bad", good_counter,bad_counter , "gray Sunshine", )
-                        #pass
+                        print(
+                            tuple(
+                                [
+                                    x1 - x2
+                                    for (x1, x2) in zip(
+                                        data_raw_multi[k], data_base_multi[k]
+                                    )
+                                ]
+                            ),
+                            ",almost bad, gray Sunshine",
+                        )
+                        # pass
                 else:
-                    bad_counter = bad_counter + 1
-                    #print(tuple([x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ),",good,gray Sunshine", )
-                    print(tuple(time.monotonic(), k, [x1 - x2 for (x1, x2) in zip( data_raw_multi[k], data_base_multi[k] ) ] ), ",good", good_counter,bad_counter , "gray Sunshine", )                    # particle is not marked for valving
+                    print(
+                        tuple(
+                            [
+                                x1 - x2
+                                for (x1, x2) in zip(
+                                    data_raw_multi[k], data_base_multi[k]
+                                )
+                            ]
+                        ),
+                        ",good,gray Sunshine",
+                    )
+                    # particle is not marked for valving
+                    bad_counter = 0
         else:
             # The signal is below threshold, so it it's ready for particles...flag down
             # Moving average for long data
-            data_base_multi[k] = [(base_weight) * x1 + (1 - base_weight) * x2 for (x1, x2) in zip(data_raw_multi[k], data_base_multi[k]) ]
+            data_base_multi[k] = [
+                (base_weight) * x1 + (1 - base_weight) * x2
+                for (x1, x2) in zip(data_raw_multi[k], data_base_multi[k])
+            ]
+    #            for l in range(len(data_multi[k])):
+    #                #print(data_raw_multi[0][0], 'x')
+    #                data_base_multi_temp[l] = (1-base_weight)*data_base_multi[k][l] + (base_weight)*data_raw_multi[k][l]
+    #            data_base_multi[k] = list(data_base_multi_temp)
+
+    ###
+    # print('raw ',data_raw_multi)
+    # print('base ',data_base_multi)
+    # print('data ',data_multi)
+    # time.sleep(.5)
+    ###
 
     ##Switches
     # In case of key #1: print
@@ -222,25 +312,25 @@ while True:
         # print(tuple(data_base_multi[0]+data_base_multi[1]+data_base_multi[2]))
         # print(tuple([time.monotonic() , particle_arrival, time.monotonic() - particle_arrival,transit,transit + window, distance(data)]))
     # In case of  key #2: acquire a new baseline
-    elif not switch_baseline.value:
-        while not switch_baseline.value:
-            base_count = base_count + 1
-            print("**Averaging baseline**  ", data_base_multi)
-            for i in range(len(multi_port)):
-                for j in range(len(data_raw_multi[i])):
-                    data_base_multi[i][j] = data_raw_multi[i][j] + data_base_multi[i][j]
-            time.sleep(0.125)
+    while not switch_baseline.value:
+        base_count = base_count + 1
+        print("**Averaging baseline**  ", data_base_multi)
+        for i in range(len(multi_port)):
+            for j in range(len(data_raw_multi[i])):
+                data_base_multi[i][j] = data_raw_multi[i][j] + data_base_multi[i][j]
+        time.sleep(0.125)
+    if base_count > 0:
         for i in range(len(multi_port)):
             for j in range(len(data_raw_multi[i])):
                 data_base_multi[i][j] = data_base_multi[i][j] / (base_count + 1)
         print("Baseline: ", data_base_multi)
         base_count = 0
     # In case of  key #3: open valve
-    elif not switch_valve.value:
+    if not switch_valve.value:
         relay.value = relay_on
         time.sleep(0.1)
     elif switch_valve.value:
         relay.value = not (relay_on)
     # In case of key #4: exit
-    elif not switch_exit.value:
+    if not switch_exit.value:
         break
